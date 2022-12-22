@@ -48,6 +48,8 @@ type Validator struct {
 
 	enabledAllowedIPCheck bool
 	allowedCIDRs          []*net.IPNet
+
+	importTemplates bool
 }
 
 // ValidatorOption represents an optional flag that can be passed to  CreateValidatorForDirectory.
@@ -109,6 +111,14 @@ func WithExpectedDataset(dataset string) ValidatorOption {
 	}
 }
 
+// WithImportedTemplates configures the validator to check imported dynamic templates.
+func WithImportedTemplates() ValidatorOption {
+	return func(v *Validator) error {
+		v.importTemplates = true
+		return nil
+	}
+}
+
 // CreateValidatorForDirectory function creates a validator for the directory.
 func CreateValidatorForDirectory(fieldsParentDir string, opts ...ValidatorOption) (v *Validator, err error) {
 	v = new(Validator)
@@ -156,6 +166,30 @@ func CreateValidatorForDirectory(fieldsParentDir string, opts ...ValidatorOption
 		return nil, errors.Wrap(err, "can't create field dependency manager")
 	}
 	v.FieldDependencyManager = fdm
+
+	// load files from dynamic templates
+	manifestFile := filepath.Join(fieldsParentDir, "manifest.yml")
+	logger.Debugf("Reading manifest file %s", manifestFile)
+	contents, err := os.ReadFile(manifestFile)
+	if err != nil {
+		return nil, err
+	}
+
+	var elasticsearchTemplates templates
+	err = yaml.Unmarshal(contents, &elasticsearchTemplates)
+	if err != nil {
+		return nil, err
+	}
+
+	fields, err := elasticsearchTemplates.FieldDefinitions()
+	if err != nil {
+		return nil, err
+	}
+	logger.Debugf("Adding following fields from index template:\n%+v", fields)
+	v.Schema = append(v.Schema, fields...)
+	contents, _ = yaml.Marshal(v.Schema)
+	logger.Debugf("Adding following fields from index template:\n%+v", string(contents))
+
 	return v, nil
 }
 
