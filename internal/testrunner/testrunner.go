@@ -24,6 +24,7 @@ type TestType string
 type TestOptions struct {
 	TestFolder         TestFolder
 	PackageRootPath    string
+	PackageBuiltPath   string
 	GenerateTestResult bool
 	API                *elasticsearch.API
 

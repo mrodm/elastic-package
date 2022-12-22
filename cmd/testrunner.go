@@ -13,6 +13,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 
+	"github.com/elastic/elastic-package/internal/builder"
 	"github.com/elastic/elastic-package/internal/cobraext"
 	"github.com/elastic/elastic-package/internal/common"
 	"github.com/elastic/elastic-package/internal/elasticsearch"
@@ -216,11 +217,23 @@ func testTypeCommandActionFactory(runner testrunner.TestRunner) cobraext.Command
 			return err
 		}
 
+		// build package
+		target, err := builder.BuildPackage(builder.BuildOptions{
+			PackageRoot:    packageRootPath,
+			CreateZip:      false,
+			SignPackage:    false,
+			SkipValidation: false,
+		})
+		if err != nil {
+			return errors.Wrap(err, "building package failed")
+		}
+
 		var results []testrunner.TestResult
 		for _, folder := range testFolders {
 			r, err := testrunner.Run(testType, testrunner.TestOptions{
 				TestFolder:         folder,
 				PackageRootPath:    packageRootPath,
+				PackageBuiltPath:   target,
 				GenerateTestResult: generateTestResult,
 				API:                esClient.API,
 				DeferCleanup:       deferCleanup,

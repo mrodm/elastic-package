@@ -49,7 +49,9 @@ type Validator struct {
 	enabledAllowedIPCheck bool
 	allowedCIDRs          []*net.IPNet
 
-	importTemplates bool
+	disabledImportTemplates bool
+
+	builtPackagePath string
 }
 
 // ValidatorOption represents an optional flag that can be passed to  CreateValidatorForDirectory.
@@ -111,10 +113,18 @@ func WithExpectedDataset(dataset string) ValidatorOption {
 	}
 }
 
-// WithImportedTemplates configures the validator to check imported dynamic templates.
-func WithImportedTemplates() ValidatorOption {
+// WithDisabledImportedTemplates configures the validator to check imported dynamic templates.
+func WithDisabledImportedTemplates() ValidatorOption {
 	return func(v *Validator) error {
-		v.importTemplates = true
+		v.disabledImportTemplates = true
+		return nil
+	}
+}
+
+// WithPackageBuild configures the validator to take into account the built package.
+func WithBuiltPackage(path string) ValidatorOption {
+	return func(v *Validator) error {
+		v.builtPackagePath = path
 		return nil
 	}
 }
@@ -167,10 +177,13 @@ func CreateValidatorForDirectory(fieldsParentDir string, opts ...ValidatorOption
 	}
 	v.FieldDependencyManager = fdm
 
-	// load files from dynamic templates
+	// load files from dynamic templates from built package
 	manifestFile := filepath.Join(fieldsParentDir, "manifest.yml")
+	manifestFileRelative := strings.TrimPrefix(manifestFile, packageRoot)
+	manifestFileBuiltPackage := filepath.Join(v.builtPackagePath, manifestFileRelative)
 	logger.Debugf("Reading manifest file %s", manifestFile)
-	contents, err := os.ReadFile(manifestFile)
+	logger.Debugf("Reading manifest file built package  %s", manifestFileBuiltPackage)
+	contents, err := os.ReadFile(manifestFileBuiltPackage)
 	if err != nil {
 		return nil, err
 	}
