@@ -184,7 +184,7 @@ func (r *runner) GetTests(ctx context.Context) ([]testrunner.Tester, error) {
 	// TODO: Return a Tester per each combination of variant plus configuration file in each data stream / folder
 	var testers []testrunner.Tester
 	for _, t := range folders {
-		testers = append(testers, NewSystemTester(SystemTesterOptions{
+		tester, err := NewSystemTester(SystemTesterOptions{
 			Profile:                    r.profile,
 			PackageRootPath:            r.packageRootPath,
 			KibanaClient:               r.kibanaClient,
@@ -198,7 +198,11 @@ func (r *runner) GetTests(ctx context.Context) ([]testrunner.Tester, error) {
 			RunTearDown:                r.runTearDown,
 			ConfigFilePath:             r.configFilePath,
 			RunIndependentElasticAgent: r.runIndependentElasticAgent,
-		}))
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create system runner: %w", err)
+		}
+		testers = append(testers, tester)
 	}
 	return testers, nil
 }
