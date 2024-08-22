@@ -269,6 +269,8 @@ func (d *DockerComposeAgentDeployer) installDockerCompose(agentInfo AgentInfo) (
 		return "", fmt.Errorf("can't read application configuration: %w", err)
 	}
 
+	logger.Debugf("Base Elastic Agent image: %s", appConfig.StackImageRefs(stackVersion).ElasticAgent)
+
 	resourceManager := resource.NewManager()
 	resourceManager.AddFacter(resource.StaticFacter{
 		"agent_image":            appConfig.StackImageRefs(stackVersion).ElasticAgent,
