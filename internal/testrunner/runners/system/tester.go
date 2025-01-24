@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1610,6 +1611,15 @@ func (r *tester) validateTestScenario(ctx context.Context, result *testrunner.Re
 
 	if r.fieldValidationMethod == allMethods || r.fieldValidationMethod == fieldsMethod {
 		if errs := validateFields(scenario.docs, fieldsValidator); len(errs) > 0 {
+			stats, err := r.getPipelineStats([]string{"logs-teleport.audit-1.2.1-event-groups"})
+			if err != nil {
+				return result.WithError(err)
+			}
+			statsJSON, err := json.MarshalIndent(stats, "", " ")
+			if err != nil {
+				return result.WithError(err)
+			}
+			logger.Warnf("JSON stats:\n%s", statsJSON)
 			return result.WithError(testrunner.ErrTestCaseFailed{
 				Reason:  fmt.Sprintf("one or more errors found in documents stored in %s data stream", scenario.dataStream),
 				Details: errs.Error(),
@@ -1640,6 +1650,15 @@ func (r *tester) validateTestScenario(ctx context.Context, result *testrunner.Re
 		if err != nil {
 			return result.WithErrorf("creating mappings validator for data stream failed (data stream: %s): %w", scenario.dataStream, err)
 		}
+		stats, err := r.getPipelineStats([]string{"logs-teleport.audit-1.2.1-event-groups"})
+		if err != nil {
+			return result.WithError(err)
+		}
+		statsJSON, err := json.MarshalIndent(stats, "", " ")
+		if err != nil {
+			return result.WithError(err)
+		}
+		logger.Warnf("JSON stats:\n%s", statsJSON)
 
 		if errs := validateMappings(ctx, mappingsValidator); len(errs) > 0 {
 			return result.WithError(testrunner.ErrTestCaseFailed{
@@ -1674,7 +1693,7 @@ func (r *tester) validateTestScenario(ctx context.Context, result *testrunner.Re
 	}
 
 	// Check transforms if present
-	if err := r.checkTransforms(ctx, config, r.pkgManifest, scenario.kibanaDataStream, scenario.dataStream, scenario.syntheticEnabled); err != nil {
+	if err := r.checkTransforms(ctx, stackVersion, config, r.pkgManifest, scenario.kibanaDataStream, scenario.dataStream, scenario.syntheticEnabled); err != nil {
 		results, _ := result.WithError(err)
 		return results, nil
 	}
@@ -2036,7 +2055,7 @@ func selectPolicyTemplateByName(policies []packages.PolicyTemplate, name string)
 	return packages.PolicyTemplate{}, fmt.Errorf("policy template %q not found", name)
 }
 
-func (r *tester) checkTransforms(ctx context.Context, config *testConfig, pkgManifest *packages.PackageManifest, ds kibana.PackageDataStream, dataStream string, syntheticEnabled bool) error {
+func (r *tester) checkTransforms(ctx context.Context, stackVersion *semver.Version, config *testConfig, pkgManifest *packages.PackageManifest, ds kibana.PackageDataStream, dataStream string, syntheticEnabled bool) error {
 	transforms, err := packages.ReadTransformsFromPackageRoot(r.packageRootPath)
 	if err != nil {
 		return fmt.Errorf("loading transforms for package failed (root: %s): %w", r.packageRootPath, err)
@@ -2046,19 +2065,14 @@ func (r *tester) checkTransforms(ctx context.Context, config *testConfig, pkgMan
 	// mappings for the fields defined in the transforms
 	// Forced to not use mappings to validate transforms before 8.14.0
 	// Related issue: https://github.com/elastic/kibana/issues/175331
-	stackVersion, err := semver.NewVersion(r.stackVersion.Number)
-	if err != nil {
-		return fmt.Errorf("invalid stack version: %w", err)
-	}
-
 	validationMethod := r.fieldValidationMethod
 	if stackVersion.LessThan(semver_8_14_0) {
 		logger.Debugf("Forced to validate transforms based on fields, not available for stack versions < 8.14.0")
 		validationMethod = fieldsMethod
 	}
 
-	fieldsValidationBased := validationMethod == allMethods || validationMethod == fieldsMethod
-	mappingsValidationBased := validationMethod == allMethods || validationMethod == mappingsMethod
+	fieldsValidationBased := slices.Contains([]fieldValidationMethod{allMethods, fieldsMethod}, validationMethod)
+	mappingsValidationBased := slices.Contains([]fieldValidationMethod{allMethods, mappingsMethod}, validationMethod)
 
 	for _, transform := range transforms {
 		hasSource, err := transform.HasSource(dataStream)
@@ -2686,4 +2700,152 @@ func (r *tester) waitForDocs(ctx context.Context, dataStream string, opts waitFo
 	}
 
 	return hits, nil
+}
+
+func (r *tester) getPipelineStats(pipelines []string) (stats PipelineStatsMap, err error) {
+	statsResponse, err := requestPipelineStats(r.esAPI)
+	if err != nil {
+		return nil, err
+	}
+	return getPipelineStats(statsResponse, pipelines)
+}
+
+func requestPipelineStats(esClient *elasticsearch.API) ([]byte, error) {
+	filterPathReq := esClient.Nodes.Stats.WithFilterPath("nodes.*.ingest.pipelines")
+	includeUnloadedSegmentReq := esClient.Nodes.Stats.WithIncludeUnloadedSegments(true)
+
+	resp, err := esClient.Nodes.Stats(filterPathReq, includeUnloadedSegmentReq)
+	if err != nil {
+		return nil, fmt.Errorf("node stats API call failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read Stats API response body: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("unexpected response status for Node Stats (%d): %s: %w", resp.StatusCode, resp.Status(), elasticsearch.NewError(body))
+	}
+
+	return body, nil
+}
+
+// StatsRecord contains stats for a measurable entity (pipeline, processor, etc.)
+type StatsRecord struct {
+	Count, Current, Failed int64
+	TimeInMillis           int64 `json:"time_in_millis"`
+}
+
+// ProcessorStats contains a processor's stats and some metadata.
+type ProcessorStats struct {
+	Type        string
+	Extra       string
+	Conditional bool
+	Stats       StatsRecord
+}
+
+// PipelineStats contains stats for a pipeline.
+type PipelineStats struct {
+	StatsRecord
+	Processors []ProcessorStats
+}
+
+// PipelineStatsMap holds the stats for a set of pipelines.
+type PipelineStatsMap map[string]PipelineStats
+
+type wrappedProcessor map[string]ProcessorStats
+
+// Extract ProcessorStats from an object in the form:
+// `{ "processor_type": { ...ProcessorStats...} }`
+func (p wrappedProcessor) extract() (stats ProcessorStats, err error) {
+	if len(p) != 1 {
+		keys := make([]string, 0, len(p))
+		for k := range p {
+			keys = append(keys, k)
+		}
+		return stats, fmt.Errorf("can't extract processor stats. Need a single key in the processor identifier, got %d: %v", len(p), keys)
+	}
+
+	// Read single entry in map.
+	var processorType string
+	for processorType, stats = range p {
+	}
+
+	// Handle compound processors in the form compound:[...extra...]
+	if off := strings.Index(processorType, ":"); off != -1 {
+		stats.Extra = processorType[off+1:]
+		processorType = processorType[:off]
+	}
+	switch stats.Type {
+	case processorType:
+	case "conditional":
+		stats.Conditional = true
+	default:
+		return stats, fmt.Errorf("can't understand processor identifier '%s' in %+v", processorType, p)
+	}
+	stats.Type = processorType
+
+	return stats, nil
+}
+
+type pipelineStatsRecord struct {
+	StatsRecord
+	Processors []wrappedProcessor
+}
+
+func (r pipelineStatsRecord) extract() (stats PipelineStats, err error) {
+	stats = PipelineStats{
+		StatsRecord: r.StatsRecord,
+		Processors:  make([]ProcessorStats, len(r.Processors)),
+	}
+	for idx, wrapped := range r.Processors {
+		if stats.Processors[idx], err = wrapped.extract(); err != nil {
+			return stats, fmt.Errorf("extracting processor %d: %w", idx, err)
+		}
+	}
+	return stats, nil
+}
+
+type pipelineStatsRecordMap map[string]pipelineStatsRecord
+
+type pipelinesStatsNode struct {
+	Ingest struct {
+		Pipelines pipelineStatsRecordMap
+	}
+}
+
+type pipelinesStatsResponse struct {
+	Nodes map[string]pipelinesStatsNode
+}
+
+func getPipelineStats(body []byte, pipelines []string) (stats PipelineStatsMap, err error) {
+	var statsResponse pipelinesStatsResponse
+	if err = json.Unmarshal(body, &statsResponse); err != nil {
+		return nil, fmt.Errorf("error decoding Node Stats response: %w", err)
+	}
+	if nodeCount := len(statsResponse.Nodes); nodeCount != 1 {
+		return nil, fmt.Errorf("need exactly one ES node in stats response (got %d)", nodeCount)
+	}
+	var nodePipelines map[string]pipelineStatsRecord
+	for _, node := range statsResponse.Nodes {
+		nodePipelines = node.Ingest.Pipelines
+	}
+	stats = make(PipelineStatsMap, len(pipelines))
+	var missing []string
+	for _, requested := range pipelines {
+		if pStats, found := nodePipelines[requested]; found {
+			if stats[requested], err = pStats.extract(); err != nil {
+				return stats, fmt.Errorf("converting pipeline %s: %w", requested, err)
+			}
+		} else {
+			missing = append(missing, requested)
+		}
+	}
+	if len(missing) != 0 {
+		return stats, fmt.Errorf("node stats response is missing expected pipelines: %s", strings.Join(missing, ", "))
+	}
+
+	return stats, nil
 }
