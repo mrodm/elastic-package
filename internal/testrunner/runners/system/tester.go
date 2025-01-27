@@ -1638,6 +1638,9 @@ func (r *tester) validateTestScenario(ctx context.Context, result *testrunner.Re
 	}
 
 	if r.fieldValidationMethod == allMethods || r.fieldValidationMethod == mappingsMethod {
+		// any errors in docs?
+		validateNoErrorsInDocs(ctx, scenario.docs)
+
 		logger.Warn("Validate mappings found (technical preview)")
 		exceptionFields := listExceptionFields(scenario.docs, fieldsValidator)
 
@@ -2378,13 +2381,9 @@ func validateFailureStore(failureStore []failureStoreDocument) error {
 }
 
 func validateFields(docs []common.MapStr, fieldsValidator *fields.Validator) multierror.Error {
-	var multiErr multierror.Error
-	for _, doc := range docs {
-		if message, err := doc.GetValue("error.message"); err != common.ErrKeyNotFound {
-			multiErr = append(multiErr, fmt.Errorf("found error.message in event: %v", message))
-			continue
-		}
+	multiErr := validateNoErrorsInDocs(docs)
 
+	for _, doc := range docs {
 		errs := fieldsValidator.ValidateDocumentMap(doc)
 		if errs != nil {
 			multiErr = append(multiErr, errs...)
@@ -2848,4 +2847,19 @@ func getPipelineStats(body []byte, pipelines []string) (stats PipelineStatsMap, 
 	}
 
 	return stats, nil
+}
+
+func validateNoErrorsInDocs(docs []common.MapStr) multierror.Error {
+	var multiErr multierror.Error
+	for _, doc := range docs {
+		if message, err := doc.GetValue("error.message"); err != common.ErrKeyNotFound {
+			multiErr = append(multiErr, fmt.Errorf("found error.message in event: %v", message))
+		}
+	}
+
+	if len(multiErr) > 0 {
+		return multiErr.Unique()
+	}
+
+	return nil
 }
