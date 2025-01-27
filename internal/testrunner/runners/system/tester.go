@@ -1638,9 +1638,6 @@ func (r *tester) validateTestScenario(ctx context.Context, result *testrunner.Re
 	}
 
 	if r.fieldValidationMethod == allMethods || r.fieldValidationMethod == mappingsMethod {
-		// any errors in docs?
-		validateNoErrorsInDocs(ctx, scenario.docs)
-
 		logger.Warn("Validate mappings found (technical preview)")
 		exceptionFields := listExceptionFields(scenario.docs, fieldsValidator)
 
@@ -1663,7 +1660,11 @@ func (r *tester) validateTestScenario(ctx context.Context, result *testrunner.Re
 		}
 		logger.Warnf("JSON stats:\n%s", statsJSON)
 
-		if errs := validateMappings(ctx, mappingsValidator); len(errs) > 0 {
+		// any errors in docs?
+		errs := validateNoErrorsInDocs(scenario.docs)
+
+		if mappingErrs := validateMappings(ctx, mappingsValidator); len(mappingErrs) > 0 {
+			errs = append(errs, mappingErrs...)
 			return result.WithError(testrunner.ErrTestCaseFailed{
 				Reason:  fmt.Sprintf("one or more errors found in mappings in %s index template", scenario.indexTemplateName),
 				Details: errs.Error(),
