@@ -87,6 +87,8 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
       - "127.0.0.1:9000:9000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   package-registry_is_ready:
     image: tianon/true:multiarch

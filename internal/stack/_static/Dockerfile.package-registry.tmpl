@@ -5,8 +5,15 @@ ARG PROFILE
 # Disable package validation (already done).
 ENV EPR_DISABLE_PACKAGE_VALIDATION=true
 
-ENV EPR_FEATURE_PROXY_MODE=true
+ENV EPR_FEATURE_PROXY_MODE=false
 ENV EPR_PROXY_TO=https://epr.elastic.co
+
+ENV EPR_FEATURE_SQL_STORAGE_INDEXER=true
+ENV EPR_STORAGE_INDEXER_BUCKET_INTERNAL="gs://example"
+
+ENV STORAGE_EMULATOR_HOST="http://host.docker.internal:4443/"
+ENV EPR_FEATURE_STORAGE_INDEXER_LOCAL_DEV=true
+
 
 COPY profiles/${PROFILE}/stack/package-registry.yml /package-registry/config.yml
 COPY stack/development/ /packages/development
